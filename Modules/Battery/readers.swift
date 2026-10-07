@@ -19,6 +19,7 @@ internal class UsageReader: Reader<Battery_Usage> {
     private var loop: CFRunLoop?
     
     private var usage: Battery_Usage = Battery_Usage()
+    private let usageLock = NSLock()
     
     deinit {
         if self.service != 0 {
@@ -27,8 +28,15 @@ internal class UsageReader: Reader<Battery_Usage> {
         }
     }
     
+    public override func setup() {
+        // no power source notifications while fully charged on AC
+        self.setInterval(5)
+    }
+    
     public override func start() {
-        self.active = true
+        super.start()
+        guard self.source == nil else { return }
+        
         let context = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         
         self.source = IOPSNotificationCreateRunLoopSource({ (context) in
@@ -44,20 +52,22 @@ internal class UsageReader: Reader<Battery_Usage> {
         
         self.loop = RunLoop.current.getCFRunLoop()
         CFRunLoopAddSource(self.loop, source, .defaultMode)
-        
-        self.read()
     }
     
     public override func stop() {
+        super.stop()
         guard let runLoop = loop, let source = source else {
             return
         }
         
-        self.active = false
         CFRunLoopRemoveSource(runLoop, source, .defaultMode)
+        self.source = nil
     }
     
     public override func read() {
+        self.usageLock.lock()
+        defer { self.usageLock.unlock() }
+        
         let psInfo = IOPSCopyPowerSourcesInfo().takeRetainedValue()
         let psList = IOPSCopyPowerSourcesList(psInfo).takeRetainedValue() as [CFTypeRef]
         
